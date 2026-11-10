@@ -1,0 +1,16 @@
+{
+  "name": "wa-dashboard",
+  "version": "3.0.0",
+  "description": "Dashboard to send service-wise WhatsApp messages from multiple numbers to new rows in Google Sheets",
+  "main": "src/server.js",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": { "start": "node src/server.js", "setup-admin": "node scripts/setup-admin.js", "fetch-brand": "node scripts/fetch-brand.js" },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "google-auth-library": "^9.15.0",
+    "qrcode": "^1.5.4",
+    "whatsapp-web.js": "^1.26.0"
+  }
+}
