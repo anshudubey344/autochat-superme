@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Sender</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="/favicon.ico">
+<script src="brand.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand" data-brand>
+    <img class="brand-logo" data-brand-logo hidden alt="">
+    <div>
+      <h1>WhatsApp Sender</h1>
+      <p id="summary" class="muted">Loading…</p>
+    </div>
+  </div>
+  <div class="top-acts">
+    <label class="poll" data-role="admin">Check sheets every
+      <select id="pollSel"><option value="10">10 sec</option><option value="15">15 sec</option><option value="30">30 sec</option><option value="60">1 min</option></select>
+    </label>
+    <button id="pauseBtn" class="btn" data-role="admin">Pause sending</button>
+    <button id="googleBtn" class="btn" data-role="editor">Google accounts</button>
+    <button id="teamBtn" class="btn" data-role="admin">Team</button>
+    <button id="accountBtn" class="btn">My account</button>
+    <button id="logoutBtn" class="btn">Sign out</button>
+  </div>
+</header>
+
+<main>
+  <section class="numbers">
+    <div class="sec-head">
+      <h2>Sending numbers</h2>
+    </div>
+    <div id="senders" class="phones"></div>
+  </section>
+
+  <div class="split">
+    <section>
+      <div class="sec-head">
+        <h2>Sheets</h2>
+        <button class="btn primary" id="addSheetBtn" data-role="editor">Add sheet</button>
+      </div>
+      <div id="sheets" class="sheet-list"></div>
+    </section>
+    <section>
+      <div class="sec-head"><h2>Activity</h2></div>
+      <ol id="log" class="log"></ol>
+    </section>
+  </div>
+</main>
+
+<!-- Sender dialog -->
+<dialog id="senderDlg">
+  <form method="dialog" id="senderForm" class="dlg">
+    <h3 id="senderDlgTitle">Add number</h3>
+    <label>Name<input name="name" required placeholder="e.g. Sales – Anshuman"></label>
+    <div class="row2">
+      <label>Messages per day<input name="dailyLimit" type="number" min="1" max="500" value="30"></label>
+      <label>Send between (hours)
+        <span class="pair"><input name="startHour" type="number" min="0" max="23" value="9"><span>to</span><input name="endHour" type="number" min="0" max="24" value="21"></span>
+      </label>
+    </div>
+    <label>Gap between messages (seconds)
+      <span class="pair"><input name="minDelay" type="number" min="2" value="8"><span>to</span><input name="maxDelay" type="number" min="2" value="20"></span>
+    </label>
+    <p class="hint">Shorter gaps and higher limits send faster, but a normal WhatsApp number that messages many strangers quickly can get banned.</p>
+    <div class="actions">
+      <button class="btn danger" type="button" id="senderDelete" hidden>Remove number</button>
+      <span class="grow"></span>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="senderSave" value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Test dialog -->
+<dialog id="testDlg">
+  <form method="dialog" id="testForm" class="dlg">
+    <h3>Send a test message</h3>
+    <label>To phone numbers<input name="phone" required maxlength="200" placeholder="8433226912, 8448025746"></label>
+    <p class="hint">Up to 5 numbers, separated by commas.</p>
+    <label>Message<textarea name="message" rows="3">Test message from the WhatsApp Sender dashboard ✅</textarea></label>
+    <p class="form-error" id="testError" hidden></p>
+    <div class="actions">
+      <span class="grow"></span>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="send">Send test</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Sheet dialog -->
+<dialog id="sheetDlg" class="wide">
+  <form method="dialog" id="sheetForm" class="dlg">
+    <h3 id="sheetDlgTitle">Add sheet</h3>
+
+    <label>Google Sheet link
+      <span class="pair grow-first"><input name="url" required placeholder="https://docs.google.com/spreadsheets/d/…"><button class="btn" type="button" id="loadCols">Load columns</button></span>
+    </label>
+    <p class="hint" id="accessHint"></p>
+    <p class="form-error" id="sheetError" hidden></p>
+
+    <div id="sheetMore" hidden>
+      <div class="row2">
+        <label>Sheet name<input name="name" placeholder="e.g. Yoga leads"></label>
+        <label>Send from<select name="senderId"></select></label>
+      </div>
+
+      <fieldset class="cols">
+        <legend>Which column has…</legend>
+        <label>Phone number<select name="col_phone" required></select></label>
+        <label>Name<select name="col_name"></select></label>
+        <label>Service<select name="col_service"></select></label>
+        <label>Write status to<select name="col_status"></select></label>
+      </fieldset>
+      <p class="hint" id="statusHint"></p>
+
+      <div class="row2">
+        <label>Country code for 10-digit numbers<input name="countryCode" value="91" inputmode="numeric"></label>
+        <fieldset class="existing" id="existingBox">
+          <legend>Rows already in the sheet</legend>
+          <label class="radio"><input type="radio" name="sendExisting" value="no" checked> Skip them, only message new rows</label>
+          <label class="radio"><input type="radio" name="sendExisting" value="yes"> Message them too</label>
+        </fieldset>
+      </div>
+
+      <div class="tpl-head">
+        <h4>Messages by service</h4>
+        <button class="btn small" type="button" id="addTpl">Add service</button>
+      </div>
+      <p class="hint">Write the service exactly as it appears in the sheet. Use <code>{name}</code> for the person's first name. "Default" is used when the service cell is empty or not listed here.</p>
+      <div id="tpls"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn danger" type="button" id="sheetDelete" hidden>Remove sheet</button>
+      <span class="grow"></span>
+      <button class="btn" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" value="save" id="sheetSave" disabled>Save sheet</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Team dialog (admins) -->
+<dialog id="teamDlg" class="wide">
+  <div class="dlg">
+    <div class="tpl-head"><h3>Team</h3><button class="btn primary small" type="button" id="addUserBtn">Add person</button></div>
+    <p class="hint">Admins can do everything. Managers can add and edit sheets and messages, and send tests, for the numbers you give them. Viewers can only look.</p>
+    <table class="users">
+      <thead><tr><th>Person</th><th>Role</th><th>Numbers</th><th>Last sign-in</th><th><span class="sr">Actions</span></th></tr></thead>
+      <tbody id="userRows"></tbody>
+    </table>
+    <div class="actions"><span class="grow"></span><button class="btn" type="button" id="teamClose">Close</button></div>
+  </div>
+</dialog>
+
+<!-- Add / edit person -->
+<dialog id="userDlg">
+  <form method="dialog" id="userForm" class="dlg">
+    <h3 id="userDlgTitle">Add person</h3>
+    <label>Username or email<input name="user" required maxlength="64" autocomplete="off"></label>
+    <label>Role
+      <select name="role">
+        <option value="manager">Manager: sheets, messages and tests</option>
+        <option value="viewer">Viewer: can only look</option>
+        <option value="admin">Admin: everything, including numbers and team</option>
+      </select>
+    </label>
+    <fieldset id="numbersBox">
+      <legend>Numbers they can use</legend>
+      <label class="radio"><input type="checkbox" name="allSenders"> All numbers, including ones added later</label>
+      <div id="numberChecks" class="checks"></div>
+    </fieldset>
+    <div id="tempPassBox" class="temp-pass" hidden>
+      <p><b>Temporary password</b>. Share it privately; it is shown only once. They must change it at first sign-in.</p>
+      <div class="pair grow-first"><input id="tempPass" readonly><button class="btn" type="button" id="copyPass">Copy</button></div>
+    </div>
+    <p class="form-error" id="userError" hidden></p>
+    <div class="actions">
+      <span class="grow"></span>
+      <button class="btn" value="cancel" formnovalidate id="userCancel">Cancel</button>
+      <button class="btn primary" value="save" id="userSave">Add person</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- My account / forced password change -->
+<dialog id="accountDlg">
+  <div class="dlg">
+    <h3 id="accountTitle">My account</h3>
+    <p class="hint" id="accountWho"></p>
+    <form id="pwForm" class="dlg-section">
+      <h4>Change password</h4>
+      <label>Current password<input name="current" type="password" autocomplete="current-password" required></label>
+      <label>New password<input name="password" type="password" autocomplete="new-password" required minlength="12"></label>
+      <label>Repeat new password<input name="repeat" type="password" autocomplete="new-password" required></label>
+      <p class="hint">At least 12 characters with upper case, lower case and a number.</p>
+      <p class="form-error" id="pwError" hidden></p>
+      <div><button class="btn primary">Change password</button></div>
+    </form>
+    <section id="tfaBox" class="dlg-section">
+      <h4>2-step sign-in</h4>
+      <p class="hint" id="tfaState"></p>
+      <div id="tfaSetup" hidden>
+        <img id="tfaQr" alt="QR code for your authenticator app" width="180" height="180">
+        <p class="hint">Scan with Google Authenticator, Authy or Microsoft Authenticator. Key: <code id="tfaKey"></code></p>
+        <div class="pair grow-first"><input id="tfaCode" inputmode="numeric" maxlength="7" placeholder="6-digit code"><button class="btn primary" type="button" id="tfaConfirm">Confirm</button></div>
+      </div>
+      <div class="pair grow-first" id="tfaOffBox" hidden><input id="tfaPass" type="password" placeholder="Your password to turn it off"><button class="btn" type="button" id="tfaOff">Turn off</button></div>
+      <button class="btn" type="button" id="tfaStart" hidden>Turn on 2-step sign-in</button>
+      <p class="form-error" id="tfaError" hidden></p>
+    </section>
+    <div class="actions"><span class="grow"></span><button class="btn" type="button" id="accountClose">Close</button></div>
+  </div>
+</dialog>
+
+<!-- Google accounts -->
+<dialog id="googleDlg">
+  <div class="dlg">
+    <h3>Google accounts</h3>
+    <p class="hint">Connect a Google account once, then paste any sheet link from that account. No need to share the sheet or make it public, and the status column can be filled in.</p>
+    <div id="googleList" class="g-list"></div>
+    <div id="googleSetup" class="temp-pass" hidden></div>
+    <div class="actions">
+      <a class="btn primary" id="googleConnect" href="/auth/google/start">Connect Google account</a>
+      <span class="grow"></span>
+      <button class="btn" type="button" id="googleClose">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

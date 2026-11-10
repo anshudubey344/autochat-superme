@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>WhatsApp Sender · Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="/favicon.ico">
+<script src="brand.js"></script>
+</head>
+<body class="login-page">
+<main class="login">
+  <div class="phone login-phone">
+    <div class="notch"></div>
+    <form class="screen dlg" id="loginForm" autocomplete="on">
+      <img class="login-logo" data-brand-logo hidden alt="">
+      <h1>WhatsApp Sender</h1>
+      <p class="muted">Sign in to manage your numbers and sheets.</p>
+      <label>Username<input name="user" autocomplete="username" required maxlength="64" autofocus></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+      <label id="codeBox" hidden>Code from authenticator app<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7"></label>
+      <p class="form-error" id="loginError" hidden></p>
+      <button class="btn primary" id="loginBtn">Sign in</button>
+    </form>
+  </div>
+</main>
+<script src="login.js"></script>
+</body>
+</html>
