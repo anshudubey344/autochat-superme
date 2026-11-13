@@ -44,7 +44,7 @@ function ring(done, limit) {
 function senderCard(s) {
   let body;
   if (s.status === 'qr' && !s.qr) {
-    body = '<span class="chip wait">Waiting to be linked</span><p class="scan">An admin needs to scan this number\'s QR code.</p>';
+    body = `<span class="chip wait">Waiting to be linked</span><p class="scan">${esc(s.ownerName)} needs to scan this number's QR code.</p>`;
   } else if (s.status === 'qr' && s.qr) {
     body = `<img class="qr" src="${s.qr}" alt="QR code to link ${esc(s.name)}">
       <p class="scan">On the phone: WhatsApp → Linked devices → Link a device, then scan this.</p>`;
@@ -64,12 +64,13 @@ function senderCard(s) {
     <div class="screen">
       <div class="who">${esc(s.name)}</div>
       <div class="num">${s.me ? '+' + esc(s.me) : ''}</div>
+      ${isAdmin() && !s.mine ? `<div class="owner">Owner: ${esc(s.ownerName)}</div>` : ''}
       ${body}
     </div>
     <div class="tools">
       ${s.status === 'ready' && canEdit() ? '<button class="btn link" data-act="test">Test</button>' : ''}
-      ${isAdmin() ? '<button class="btn link" data-act="edit">Settings</button>' : ''}
-      ${!isAdmin() ? '' : s.status === 'ready' ? '<button class="btn link" data-act="logout">Log out</button>' : '<button class="btn link" data-act="reconnect">Reconnect</button>'}
+      ${s.canManage ? '<button class="btn link" data-act="edit">Settings</button>' : ''}
+      ${!s.canManage ? '' : s.status === 'ready' ? '<button class="btn link" data-act="logout">Log out</button>' : '<button class="btn link" data-act="reconnect">Reconnect</button>'}
     </div>
   </article>`;
 }
@@ -84,16 +85,20 @@ function sheetCard(h) {
       <div class="meta">From ${esc(sender ? sender.name : '—')} · via ${esc(h.viaLabel)} · checked ${h.lastChecked ? ago(h.lastChecked) : 'not yet'} · ${h.rowCount ?? 0} row${h.rowCount === 1 ? '' : 's'}${h.via && h.cols.status >= 0 ? ' · writes status' : ''}</div>
     </div>
     <div class="acts" data-role="editor">
+      <button class="btn small ${h.enabled ? '' : 'primary'}" data-act="toggle">${h.enabled ? 'Stop' : 'Start'}</button>
+      <button class="btn link" data-act="review">Review${st.review ? ` (${st.review})` : ''}</button>
       <button class="btn link" data-act="check">Check now</button>
-      <button class="btn link" data-act="toggle">${h.enabled ? 'Turn off' : 'Turn on'}</button>
       <button class="btn link" data-act="edit">Edit</button>
     </div>
+    <div class="mode"><span class="chip ${h.enabled ? 'ready' : 'wait'}">${h.enabled ? 'Running' : 'Stopped'}</span>
+      ${h.mode === 'auto' ? 'Sends automatically to new rows' : 'You choose who gets a message'}${h.cols.send >= 0 ? ' · only ticked rows' : ''}
+      ${st.review && h.mode !== 'auto' ? `<button class="btn link" data-act="review"><b>${st.review} waiting for your OK</b></button>` : ''}</div>
     <div class="nums">
       <span><b>${st.sent}</b>sent</span>
       <span><b>${st.waiting}</b>waiting</span>
       <span class="${st.notOn ? 'warn' : ''}"><b>${st.notOn}</b>not on WhatsApp</span>
       <span class="${st.failed ? 'warn' : ''}"><b>${st.failed}</b>failed</span>
-      ${st.skipped ? `<span><b>${st.skipped}</b>old rows skipped</span>` : ''}
+      ${st.skipped ? `<span><b>${st.skipped}</b>not sent (skipped)</span>` : ''}
     </div>
     <div class="services">${services}</div>
     ${st.error ? `<div class="problem">${esc(st.error)}</div>` : ''}
@@ -120,8 +125,8 @@ function render() {
   }
 
   $('#senders').innerHTML = S.senders.map(senderCard).join('') +
-    (isAdmin() ? `<button class="phone add" data-act="add">+ Add number</button>` : '') +
-    (!S.senders.length && !isAdmin() ? '<div class="empty">No numbers are shared with you yet. Ask an admin for access.</div>' : '');
+    (canEdit() ? `<button class="phone add" data-act="add">+ Add ${S.senders.some((x) => x.mine) ? 'another' : 'your'} WhatsApp number</button>` : '') +
+    (!S.senders.length && !canEdit() ? '<div class="empty">No numbers are shared with you yet. Ask an admin for access.</div>' : '');
 
   $('#sheets').innerHTML = S.sheets.length ? S.sheets.map(sheetCard).join('')
     : `<div class="empty">${!canEdit() ? 'No sheets yet.' : S.senders.length ? 'Add a Google Sheet to start sending.' : 'Add and connect a number first, then add a sheet.'}</div>`;
@@ -212,13 +217,16 @@ function tplRow(t = { service: '', message: '' }) {
 function showColumns(p, h) {
   preview = p;
   const f = $('#sheetForm');
-  colOptions(f.elements.col_phone, p.headers, h ? h.cols.phone : guess(p.headers, ['phone', 'mobile', 'number', 'whatsapp', 'contact no']));
+  colOptions(f.elements.col_phone, p.headers, h ? h.cols.phone : guess(p.headers, ['phone', 'mobile', 'whatsapp', 'contact', 'number']));
   colOptions(f.elements.col_name, p.headers, h ? h.cols.name : guess(p.headers, ['name']), 'No name column');
   colOptions(f.elements.col_service, p.headers, h ? h.cols.service : guess(p.headers, ['service', 'interest', 'program']), 'No service column (always "Default")');
-  colOptions(f.elements.col_status, p.headers, h ? h.cols.status : (p.canWrite ? guess(p.headers, ['status', 'whatsapp msg']) : -1), 'Don\'t write status');
+  colOptions(f.elements.col_send, p.headers, h ? (h.cols.send ?? -1) : guess(p.headers, ['send', 'approve', 'response']), 'Every row (no tick column)');
+  colOptions(f.elements.col_cc, p.headers, h ? (h.cols.cc ?? -1) : guess(p.headers, ['country code', 'country', 'isd', 'dial code']), 'No column (use default below)');
+  colOptions(f.elements.col_status, p.headers, h ? h.cols.status : (p.canWrite ? guess(p.headers, ['message sent', 'msg sent', 'whatsapp msg', 'wa status', 'sent']) : -1), 'Don\'t write status');
   f.elements.col_status.disabled = !p.canWrite;
   $('#statusHint').textContent = p.canWrite ? `Opened with ${p.via}.` :
     'Opened through the public link, so status is shown here only. Connect the Google account that owns this sheet (Google accounts button) to also write status into the sheet.';
+  $('#addFromSheet').hidden = !(p.values && p.values.length);
   $('#sheetMore').hidden = false;
   $('#sheetSave').disabled = false;
 }
@@ -228,7 +236,7 @@ function openSheet(h) {
   const f = $('#sheetForm'); f.reset();
   $('#sheetDlgTitle').textContent = h ? 'Edit sheet' : 'Add sheet';
   $('#sheetDelete').hidden = !h;
-  $('#existingBox').hidden = !!h;
+  f.elements.mode.value = h ? (h.mode || 'auto') : 'manual';
   $('#sheetError').hidden = true;
   $('#sheetMore').hidden = true;
   $('#sheetSave').disabled = true;
@@ -238,7 +246,9 @@ function openSheet(h) {
       ? `Any sheet from ${g.accounts.map((a) => a.email).join(', ')} works without sharing. Open the right tab, then copy the link.`
       : 'Tip: connect your Google account (Google accounts button) and you won\'t need to share sheets. Otherwise set the sheet to "Anyone with the link → Viewer". Open the right tab, then copy the link.';
   }).catch(() => {});
-  f.elements.senderId.innerHTML = S.senders.map((s) => `<option value="${s.id}">${esc(s.name)}${s.me ? ' (+' + esc(s.me) + ')' : ''}</option>`).join('');
+  // Send from: only your own numbers (plus the number this sheet already uses, when editing)
+  const choices = S.senders.filter((s) => s.mine || (h && s.id === h.senderId));
+  f.elements.senderId.innerHTML = choices.map((s) => `<option value="${s.id}">${esc(s.name)}${s.me ? ' (+' + esc(s.me) + ')' : ''}${s.mine ? '' : ' · ' + esc(s.ownerName)}</option>`).join('');
   $('#tpls').innerHTML = '';
   (h ? h.templates : S.defaultTemplates).forEach(tplRow);
   if (h) {
@@ -263,21 +273,41 @@ async function loadColumns(h) {
 }
 
 $('#loadCols').addEventListener('click', () => loadColumns(editSheet && $('#sheetForm').elements.url.value === editSheet.url ? editSheet : null));
+// Create a message row for every service value found in the sheet's service column
+const nsvc = (v) => String(v || '').replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+function starterMessage(service) {
+  const v = nsvc(service), d = (S.defaultTemplates || []);
+  const pick = (k) => (d.find((t) => nsvc(t.service).includes(k)) || {}).message;
+  if (/1:1|private|personal/.test(v)) return pick('1:1');
+  if (/stream|record|on demand/.test(v)) return pick('stream');
+  if (/live|group/.test(v)) return pick('live');
+  if (/coach/.test(v)) return pick('coach');
+  if (/therap/.test(v)) return pick('therapy');
+  if (/not sure|help|choose/.test(v)) return 'Hi {name}! 😊 Thanks for your interest in SuperMe.\n\nNot sure which option suits you? Tell us a little about your goals and we\'ll suggest the best fit: 1:1 sessions, live group classes or streaming.\nJust reply to this message.';
+  return 'Hi {name}! Thanks for your interest in {service}. Our team will get in touch with you shortly.';
+}
+$('#addFromSheet').addEventListener('click', () => {
+  const col = Number($('#sheetForm').elements.col_service.value);
+  if (!(col >= 0) || !preview) return toast('Choose the service column first', true);
+  const have = new Set([...document.querySelectorAll('#tpls .tpl input')].map((i) => nsvc(i.value)));
+  const fresh = (preview.values[col] || []).filter((v) => !have.has(nsvc(v)));
+  fresh.forEach((v) => tplRow({ service: v, message: starterMessage(v) }));
+  toast(fresh.length ? `Added ${fresh.length} service(s). Check the messages, then save.` : 'Every service in the sheet already has a message');
+});
 $('#addTpl').addEventListener('click', () => { tplRow(); $('#tpls').lastChild.querySelector('input').focus(); });
 
 $('#sheetForm').addEventListener('submit', async (e) => {
   if (e.submitter && e.submitter.value === 'cancel') return;
   e.preventDefault();
   const f = e.target;
-  if (!f.elements.senderId.value) { $('#sheetError').textContent = 'Add a sending number first.'; $('#sheetError').hidden = false; return; }
+  if (!f.elements.senderId.value) { $('#sheetError').textContent = 'Add your WhatsApp number first (+ Add your WhatsApp number), then add the sheet.'; $('#sheetError').hidden = false; return; }
   const templates = [...document.querySelectorAll('#tpls .tpl')].map((d) => ({ service: d.querySelector('input').value, message: d.querySelector('textarea').value }));
   const body = {
     url: f.elements.url.value, name: f.elements.name.value, senderId: f.elements.senderId.value,
     countryCode: f.elements.countryCode.value, templates,
-    cols: { phone: f.elements.col_phone.value, name: f.elements.col_name.value, service: f.elements.col_service.value, status: f.elements.col_status.disabled ? -1 : f.elements.col_status.value },
-    sendExisting: f.elements.sendExisting.value === 'yes',
+    cols: { phone: f.elements.col_phone.value, name: f.elements.col_name.value, service: f.elements.col_service.value, cc: f.elements.col_cc.value, send: f.elements.col_send.value, status: f.elements.col_status.disabled ? -1 : f.elements.col_status.value },
+    mode: f.elements.mode.value,
   };
-  if (body.sendExisting && preview && !confirm(`This will message all ${preview.rowCount} rows already in the sheet. Continue?`)) return;
   const btn = $('#sheetSave'); btn.disabled = true;
   try {
     if (editSheet) { await api('PATCH', `/api/sheets/${editSheet.id}`, body); toast('Sheet saved'); }
@@ -298,13 +328,21 @@ $('#sheets').addEventListener('click', async (e) => {
   const h = S.sheets.find((x) => x.id === btn.closest('.sheet').dataset.id);
   try {
     if (btn.dataset.act === 'edit') return openSheet(h);
-    if (btn.dataset.act === 'toggle') { await api('PATCH', `/api/sheets/${h.id}`, { enabled: !h.enabled }); toast(h.enabled ? 'Sheet turned off' : 'Sheet turned on'); }
-    if (btn.dataset.act === 'check') { const r = await api('POST', `/api/sheets/${h.id}/check`); toast(r.queued ? `${r.queued} new message(s) queued` : 'No new rows'); }
+    if (btn.dataset.act === 'review') return openReview(h);
+    if (btn.dataset.act === 'toggle') {
+      if (h.enabled) { await api('PATCH', `/api/sheets/${h.id}`, { enabled: false }); toast('Sheet stopped. Nothing more is sent from it.'); }
+      else if (h.mode === 'auto') return openStart(h);
+      else { await api('PATCH', `/api/sheets/${h.id}`, { enabled: true }); toast('Started. New rows will wait in Review for your OK.'); }
+    }
+    if (btn.dataset.act === 'check') {
+      const r = await api('POST', `/api/sheets/${h.id}/check`);
+      toast(r.pending !== undefined ? (r.pending ? `${r.pending} row(s) waiting in Review` : 'Nothing new to review') : r.queued ? `${r.queued} new message(s) queued` : 'No new rows');
+    }
     refresh();
   } catch (err) { toast(err.message, true); refresh(); }
 });
 
-$('#addSheetBtn').addEventListener('click', () => S.senders.length ? openSheet() : toast('Add a sending number first', true));
+$('#addSheetBtn').addEventListener('click', () => S.senders.some((x) => x.mine) ? openSheet() : toast('Add your WhatsApp number first', true));
 $('#pauseBtn').addEventListener('click', async () => {
   try { await api('POST', '/api/pause', { paused: !S.paused }); toast(S.paused ? 'Sending resumed' : 'Sending paused'); refresh(); }
   catch (e) { toast(e.message, true); }
@@ -320,6 +358,91 @@ $('#logoutBtn').addEventListener('click', async () => {
   location.replace('/login.html');
 });
 
+// ---------- start an automatic sheet ----------
+let startSheet = null;
+function openStart(h) {
+  startSheet = h;
+  $('#startTitle').textContent = `Start "${h.name}"`;
+  $('#startText').textContent = `Every new row will get its message automatically. The sheet has ${h.rowCount ?? 0} row(s) right now. Message them too, or only rows added from now on?`;
+  $('#startDlg').returnValue = '';
+  $('#startDlg').showModal();
+}
+$('#startDlg').addEventListener('close', async () => {
+  const v = $('#startDlg').returnValue;
+  if (v !== 'new' && v !== 'all') return;
+  if (v === 'all' && !confirm(`Send to all ${startSheet.rowCount ?? 0} rows already in "${startSheet.name}"?`)) return;
+  try {
+    await api('PATCH', `/api/sheets/${startSheet.id}`, { enabled: true, sendExisting: v === 'all' });
+    toast(v === 'all' ? 'Started. Sending to all rows.' : 'Started. Only new rows will get messages.');
+    refresh();
+  } catch (e) { toast(e.message, true); }
+});
+
+// ---------- review: choose who gets which message ----------
+let reviewSheet = null, reviewData = null;
+async function openReview(h) {
+  reviewSheet = h;
+  $('#reviewTitle').textContent = `Review: ${h.name}`;
+  $('#reviewRows').innerHTML = '<tr><td colspan="5" class="muted">Loading the sheet…</td></tr>';
+  $('#reviewError').hidden = true; $('#reviewAll').checked = false;
+  if (!$('#reviewDlg').open) $('#reviewDlg').showModal();
+  try {
+    reviewData = await api('GET', `/api/sheets/${h.id}/review`);
+    const opts = (sel) => reviewData.messages.map((m) => `<option value="${esc(m.service)}" ${m.service.toLowerCase() === String(sel).toLowerCase() ? 'selected' : ''}>${esc(m.service)}</option>`).join('');
+    $('#reviewBulk').innerHTML = '<option value="">Choose…</option>' + opts('');
+    $('#reviewRows').innerHTML = reviewData.rows.length ? reviewData.rows.map((r, i) => {
+      const pick = r.known ? r.service : (reviewData.messages.find((m) => m.service.toLowerCase() === 'default') || {}).service || '';
+      return `<tr data-i="${i}">
+        <td><input type="checkbox" class="pick" aria-label="Select row ${r.row}"></td>
+        <td>${r.row}</td><td>${esc(r.name) || '<span class="muted">—</span>'}</td><td>+${esc(r.phone)}</td>
+        <td><select class="msg" aria-label="Message for row ${r.row}">${r.known ? '' : '<option value="">Choose…</option>'}${opts(pick)}</select>
+          ${r.known ? '' : `<small class="muted">sheet says "${esc(r.service)}"</small>`}</td></tr>`;
+    }).join('') : '<tr><td colspan="5" class="muted">Nothing waiting. New rows in the sheet will show up here.</td></tr>';
+    $('#reviewHint').textContent = reviewData.total > reviewData.rows.length
+      ? `Showing the first ${reviewData.rows.length} of ${reviewData.total}. Tick people, pick a message, then Send.`
+      : 'Tick the people to message and pick the message for each. Rows you mark "Don\'t send" won\'t show up again.';
+    syncReview();
+  } catch (e) { $('#reviewRows').innerHTML = ''; $('#reviewError').textContent = e.message; $('#reviewError').hidden = false; }
+}
+function selectedReview() {
+  return [...document.querySelectorAll('#reviewRows tr[data-i]')].filter((tr) => tr.querySelector('.pick').checked).map((tr) => {
+    const r = reviewData.rows[Number(tr.dataset.i)];
+    return { row: r.row, phone: r.phone, from: r.service, service: tr.querySelector('.msg').value, name: r.name };
+  });
+}
+function syncReview() {
+  const sel = selectedReview();
+  $('#reviewSend').disabled = !sel.length; $('#reviewSkip').disabled = !sel.length;
+  $('#reviewSend').textContent = sel.length ? `Send to ${sel.length} selected` : 'Send to selected';
+  const first = sel[0] || (reviewData && reviewData.rows[0] && { service: document.querySelector('#reviewRows .msg')?.value, name: reviewData.rows[0].name });
+  const m = first && reviewData.messages.find((x) => x.service === first.service);
+  $('#reviewPreview').textContent = m ? m.message.replace(/\{name\}/gi, String(first.name || 'there').split(/\s+/)[0]).replace(/\{service\}/gi, m.service) : 'Pick a message to preview it.';
+}
+$('#reviewRows').addEventListener('change', syncReview);
+$('#reviewAll').addEventListener('change', (e) => { document.querySelectorAll('#reviewRows .pick').forEach((c) => { c.checked = e.target.checked; }); syncReview(); });
+$('#reviewBulk').addEventListener('change', (e) => {
+  if (!e.target.value) return;
+  document.querySelectorAll('#reviewRows tr[data-i]').forEach((tr) => { if (tr.querySelector('.pick').checked) tr.querySelector('.msg').value = e.target.value; });
+  e.target.value = ''; syncReview();
+});
+$('#reviewClose').addEventListener('click', () => { $('#reviewDlg').close(); refresh(); });
+$('#reviewSend').addEventListener('click', async () => {
+  const items = selectedReview();
+  if (items.some((i) => !i.service)) { $('#reviewError').textContent = 'Pick a message for every selected row.'; $('#reviewError').hidden = false; return; }
+  if (!confirm(`Send WhatsApp messages to ${items.length} ${items.length === 1 ? 'person' : 'people'} now?`)) return;
+  try {
+    const r = await api('POST', `/api/sheets/${reviewSheet.id}/approve`, { items });
+    toast(r.problems.length ? `${r.queued} queued. Not sent: ${r.problems.join('; ')}` : `${r.queued} message(s) on the way`, !!r.problems.length);
+    openReview(reviewSheet);
+  } catch (e) { $('#reviewError').textContent = e.message; $('#reviewError').hidden = false; }
+});
+$('#reviewSkip').addEventListener('click', async () => {
+  const items = selectedReview();
+  if (!confirm(`Mark ${items.length} row(s) as "don't send"? They won't show up in Review again.`)) return;
+  try { const r = await api('POST', `/api/sheets/${reviewSheet.id}/skip`, { items }); toast(`${r.skipped} row(s) won't be messaged`); openReview(reviewSheet); }
+  catch (e) { $('#reviewError').textContent = e.message; $('#reviewError').hidden = false; }
+});
+
 // ---------- team (admins) ----------
 let editUser = null;
 const roleName = { admin: 'Admin', manager: 'Manager', viewer: 'Viewer' };
@@ -330,7 +453,12 @@ async function loadTeam() {
   $('#userRows').innerHTML = list.map((u) => `<tr class="${u.disabled ? 'off' : ''}" data-id="${u.id}">
     <td><b>${esc(u.user)}</b>${u.id === S.me.id ? '<small>You</small>' : ''}${u.disabled ? '<small>Turned off</small>' : u.mustChange ? '<small>Hasn\'t set a password yet</small>' : ''}${u.totp ? '<small>2-step on</small>' : ''}</td>
     <td><span class="role-tag ${u.role}">${roleName[u.role]}</span></td>
-    <td>${u.allSenders ? 'All' : u.senderIds.length ? u.senderIds.map((id) => esc(names[id] || '?')).join(', ') : '<span class="muted">None</span>'}</td>
+    <td>${(() => {
+      if (u.allSenders) return 'All';
+      const own = S.senders.filter((x) => x.ownerId === u.id).map((x) => esc(x.name) + ' <span class="own">(own)</span>');
+      const shared = u.senderIds.filter((id) => !S.senders.some((x) => x.id === id && x.ownerId === u.id)).map((id) => esc(names[id] || '?'));
+      return [...own, ...shared].join(', ') || '<span class="muted">None</span>';
+    })()}</td>
     <td>${u.lastLogin ? ago(u.lastLogin) : '<span class="muted">Never</span>'}</td>
     <td><div class="row-acts">
       <button class="btn link" data-act="edit">Edit</button>

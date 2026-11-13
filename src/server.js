@@ -207,6 +207,9 @@ app.delete('/api/users/:id', wrap((req, res) => {
   if (req.params.id === req.user.id) throw new UserError('You can\'t remove yourself');
   const u = users.remove(req.params.id);
   sec.destroyUserSessions(u.id);
+  const owned = store.db.senders.filter((x) => x.ownerId === u.id);
+  owned.forEach((x) => { x.ownerId = req.user.id; });
+  if (owned.length) store.save();
   audit(req, 'security', `User "${u.user}" removed`);
   res.json({ ok: true });
 }));
@@ -225,10 +228,14 @@ app.get('/api/state', (req, res) => {
     pollSeconds: Number(db.settings.pollSeconds) || Number(process.env.POLL_SECONDS) || 15,
     serviceAccountEmail: users.canEdit(me) ? sheets.serviceAccountEmail() : null,
     defaultTemplates: DEFAULT_TEMPLATES,
-    senders: mySenders.map((s) => {
-      const st = senders.state(s.id);
-      return { ...s, ...st, qr: users.isAdmin(me) ? st.qr : null, sentToday: engine.sentToday(s.id), inHours: engine.inHours(s) };  // only admins can link a phone
-    }),
+    senders: mySenders
+      .map((s) => {
+        const st = senders.state(s.id), manage = users.canManageSender(me, s);
+        const owner = s.ownerId ? users.find(s.ownerId) : null;
+        return { ...s, ...st, qr: manage ? st.qr : null, canManage: manage, mine: s.ownerId === me.id || (!s.ownerId && users.isAdmin(me)),   // admin-owned numbers count as every admin's own  // only the owner / admins see the QR
+          ownerName: owner ? owner.user : 'Admins', sentToday: engine.sentToday(s.id), inHours: engine.inHours(s) };
+      })
+      .sort((a, b) => (b.mine - a.mine)),                         // your own numbers first
     sheets: mySheets.map((s) => ({ ...s, viaLabel: viaLabel(s.via), stats: engine.stats(s.id) })),
     log: log.slice(0, 150),
   });
@@ -260,38 +267,42 @@ function senderFields(b, prev = {}) {
     endHour: num(b.endHour, prev.endHour ?? 21, 0, 24),
   };
 }
+const needManage = (req, s) => { if (!users.canManageSender(req.user, s)) throw forbidden(); };
+
 app.post('/api/senders', wrap((req, res) => {
-  needAdmin(req);
-  const s = { id: store.id('s'), ...senderFields(req.body) };
+  needEditor(req);
+  if (!users.isAdmin(req.user) && store.db.senders.filter((x) => x.ownerId === req.user.id).length >= 5) throw new UserError('You can add up to 5 numbers. Ask an admin for more.');
+  const s = { id: store.id('s'), ...senderFields(req.body), ownerId: req.user.id };
   store.db.senders.push(s); store.save();
   senders.start(s);
   audit(req, 'info', `Number "${s.name}" added. Scan its QR code to connect.`, { senderId: s.id });
   res.json(s);
 }));
 app.patch('/api/senders/:id', wrap((req, res) => {
-  needAdmin(req);
   const s = senderFor(req, req.params.id);
+  needManage(req, s);
   Object.assign(s, senderFields(req.body, s)); store.save();
   audit(req, 'info', `Settings changed for "${s.name}"`, { senderId: s.id });
   engine.kick(s.id);
   res.json(s);
 }));
 app.post('/api/senders/:id/reconnect', wrap(async (req, res) => {
-  needAdmin(req);
-  await senders.restart(senderFor(req, req.params.id));
+  const s = senderFor(req, req.params.id);
+  needManage(req, s);
+  await senders.restart(s);
   res.json({ ok: true });
 }));
 app.post('/api/senders/:id/logout', wrap(async (req, res) => {
-  needAdmin(req);
   const s = senderFor(req, req.params.id);
+  needManage(req, s);
   await senders.logout(s.id);
   audit(req, 'info', `${s.name} logged out of WhatsApp`, { senderId: s.id });
   senders.start(s);   // shows a fresh QR
   res.json({ ok: true });
 }));
 app.delete('/api/senders/:id', wrap(async (req, res) => {
-  needAdmin(req);
   const s = senderFor(req, req.params.id);
+  needManage(req, s);
   if (store.db.sheets.some((x) => x.senderId === s.id)) throw new UserError('Move or remove the sheets that use this number first');
   await senders.logout(s.id);
   store.db.senders = store.db.senders.filter((x) => x.id !== s.id); store.save();
@@ -368,7 +379,7 @@ const canonicalUrl = (id, gid) => `https://docs.google.com/spreadsheets/d/${id}/
 
 function sheetFields(req, b, prev = {}) {
   const c = b.cols || prev.cols || {};
-  const cols = { name: num(c.name, -1, -1, 200), phone: num(c.phone, -1, -1, 200), service: num(c.service, -1, -1, 200), status: num(c.status, -1, -1, 200) };
+  const cols = { name: num(c.name, -1, -1, 200), phone: num(c.phone, -1, -1, 200), service: num(c.service, -1, -1, 200), status: num(c.status, -1, -1, 200), cc: num(c.cc, -1, -1, 200), send: num(c.send, -1, -1, 200) };
   if (cols.phone < 0) throw new UserError('Choose the phone number column');
   const senderId = b.senderId ?? prev.senderId;
   senderFor(req, senderId);                                      // must be a number this user may use
@@ -381,7 +392,8 @@ function sheetFields(req, b, prev = {}) {
     name: str(b.name ?? prev.name, 80, 'Sheet name') || 'Sheet',
     senderId, cols, templates,
     countryCode: String(b.countryCode ?? prev.countryCode ?? '91').replace(/\D/g, '').slice(0, 4) || '91',
-    enabled: typeof b.enabled === 'boolean' ? b.enabled : (prev.enabled ?? true),
+    enabled: typeof b.enabled === 'boolean' ? b.enabled : (prev.enabled ?? false),
+    mode: ['manual', 'auto'].includes(b.mode) ? b.mode : (prev.mode || 'manual'),
   };
 }
 
@@ -398,23 +410,27 @@ app.post('/api/sheets/preview', wrap(async (req, res) => {
   const { spreadsheetId, gid } = sheets.parseUrl(str(req.body.url, 500, 'Link'));
   const r = await sheets.open(spreadsheetId, gid, google.usableBy(req.user));
   if (!r.rows.length) throw new UserError('The sheet is empty. Add a header row first.');
-  res.json({ headers: r.rows[0].map((h) => String(h).slice(0, 100)), rowCount: r.rows.length - 1, canWrite: r.canWrite, via: viaLabel(r.via) });
+  const values = r.rows[0].map((_, ci) => {                       // distinct values per column (used to set up messages)
+    const seen = new Map();
+    for (const row of r.rows.slice(1)) {
+      const v = engine.pretty(row[ci]);
+      if (v && !seen.has(engine.normSvc(v)) && seen.size < 40) seen.set(engine.normSvc(v), v.slice(0, 80));
+    }
+    return [...seen.values()];
+  });
+  res.json({ headers: r.rows[0].map((h) => String(h).slice(0, 100)), rowCount: r.rows.length - 1, canWrite: r.canWrite, via: viaLabel(r.via), values });
 }));
 app.post('/api/sheets', wrap(async (req, res) => {
   needEditor(req);
   const { spreadsheetId, gid } = sheets.parseUrl(str(req.body.url, 500, 'Link'));
   const fields = sheetFields(req, req.body);
   const opened = await sheets.open(spreadsheetId, gid, google.usableBy(req.user));
-  const sheet = { id: store.id('h'), url: canonicalUrl(spreadsheetId, gid), spreadsheetId, gid, ...fields, via: opened.via, canWrite: opened.canWrite };
+  // Loading a sheet never sends anything: it starts stopped until you press Start (or approve rows in Review).
+  const sheet = { id: store.id('h'), url: canonicalUrl(spreadsheetId, gid), spreadsheetId, gid, ...fields, enabled: false, via: opened.via, canWrite: opened.canWrite };
   if (!sheet.canWrite) sheet.cols.status = -1;
   store.db.sheets.push(sheet); store.save();
-  if (!req.body.sendExisting) {
-    await engine.checkSheet(sheet, { baselineOnly: true });
-    audit(req, 'info', `Sheet "${sheet.name}" added (via ${viaLabel(sheet.via)}). ${sheet.rowCount} existing row(s) skipped; only new rows get messages.`, { sheetId: sheet.id });
-  } else {
-    audit(req, 'info', `Sheet "${sheet.name}" added (via ${viaLabel(sheet.via)}). Existing rows will get messages too.`, { sheetId: sheet.id });
-    engine.checkSheet(sheet).catch(() => {});
-  }
+  await engine.pending(sheet).catch(() => {});                  // fills row count + "waiting for review"
+  audit(req, 'info', `Sheet "${sheet.name}" loaded (via ${viaLabel(sheet.via)}), ${sheet.rowCount} rows. Nothing is sent until you start it or approve rows.`, { sheetId: sheet.id });
   res.json(sheet);
 }));
 app.patch('/api/sheets/:id', wrap(async (req, res) => {
@@ -430,12 +446,42 @@ app.patch('/api/sheets/:id', wrap(async (req, res) => {
     const opened = await sheets.open(target.spreadsheetId, target.gid, google.usableBy(req.user));
     Object.assign(s, target, { url: canonicalUrl(target.spreadsheetId, target.gid), via: opened.via, canWrite: opened.canWrite });
   }
+  const startsAuto = next.enabled && next.mode === 'auto' && !(s.enabled && s.mode === 'auto');
   Object.assign(s, next);
   if (!s.canWrite) s.cols.status = -1;
   if (oldSender !== s.senderId) engine.forgetSheet(s.id);
+  // Starting automatic sending: rows already in the sheet are skipped unless you asked for them
+  if (startsAuto && !req.body.sendExisting) await engine.checkSheet(s, { baselineOnly: true });
   store.save();
-  audit(req, 'info', `Sheet "${s.name}" ${typeof req.body.enabled === 'boolean' && Object.keys(req.body).length === 1 ? (s.enabled ? 'turned on' : 'turned off') : 'updated'}`, { sheetId: s.id });
+  const toggled = typeof req.body.enabled === 'boolean' && Object.keys(req.body).every((k) => ['enabled', 'sendExisting'].includes(k));
+  audit(req, 'info', `Sheet "${s.name}" ${toggled ? (s.enabled ? `started (${s.mode === 'auto' ? `automatic${req.body.sendExisting ? ', including rows already there' : ', new rows only'}` : 'you approve each row'})` : 'stopped') : 'updated'}`, { sheetId: s.id });
+  if (s.enabled) engine.checkSheet(s).catch(() => {});
   res.json(s);
+}));
+// ---- review: you choose who gets which message ----
+app.get('/api/sheets/:id/review', wrap(async (req, res) => {
+  needEditor(req);
+  const s = sheetFor(req, req.params.id);
+  const list = await engine.pending(s);
+  res.json({
+    rows: list.slice(0, 500).map((p) => ({ row: p.row, name: p.name, phone: p.phone, service: p.service, known: !p.tplMissing })),
+    total: list.length,
+    messages: (s.templates || []).map((t) => ({ service: t.service, message: t.message })),
+  });
+}));
+const reviewItems = (b) => {
+  const items = Array.isArray(b.items) ? b.items.slice(0, 300) : [];
+  if (!items.length) throw new UserError('Select at least one row');
+  return items.map((i) => ({ row: num(i.row, 0, 0, 1e6), phone: String(i.phone || '').replace(/\D/g, '').slice(0, 15),
+    from: str(i.from, 80, 'Message type'), service: str(i.service, 80, 'Message type') }));
+};
+app.post('/api/sheets/:id/approve', wrap(async (req, res) => {
+  needEditor(req);
+  res.json(await engine.approve(sheetFor(req, req.params.id), reviewItems(req.body), req.user.user));
+}));
+app.post('/api/sheets/:id/skip', wrap(async (req, res) => {
+  needEditor(req);
+  res.json(await engine.skip(sheetFor(req, req.params.id), reviewItems(req.body), req.user.user));
 }));
 app.post('/api/sheets/:id/check', wrap(async (req, res) => {
   needEditor(req);

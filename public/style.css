@@ -114,7 +114,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--leaf); outline: 
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 fieldset { border: 1px solid var(--line); border-radius: 10px; margin: 0; padding: 10px 12px 12px; }
 legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
-fieldset.cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+fieldset.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
 .radio { flex-direction: row !important; align-items: center; gap: 8px !important; font-weight: 400 !important; }
 .radio input { width: auto; }
 .hint { margin: -4px 0 0; color: var(--muted); font-size: 13px; }
@@ -198,3 +198,21 @@ a.btn { text-decoration: none; display: inline-block; }
 .brand.has-logo h1 { font-size: 20px; }
 .login-logo { height: 44px; width: auto; max-width: 200px; object-fit: contain; align-self: flex-start; margin-bottom: 4px; }
 @media (max-width: 560px) { .brand-logo { height: 30px; max-width: 110px; } .brand.has-logo h1 { font-size: 17px; } }
+
+.phone .owner { font-size: 12px; color: var(--muted); background: var(--paper); border-radius: 6px; padding: 1px 8px; }
+.users td .own { color: var(--muted); font-size: 12px; }
+
+/* Sheet mode + review */
+.sheet .mode { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); }
+.sheet .mode .chip { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; }
+.sheet .mode .btn.link { padding: 0 4px; font-size: 13px; }
+.sheet .acts { align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.review-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.review-bar .pair select { width: auto; }
+.review-wrap { max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.review td { vertical-align: middle; }
+.review td select { min-width: 150px; }
+.review td small { display: block; }
+.review input[type=checkbox] { width: 18px; height: 18px; }
+.preview summary { cursor: pointer; font-size: 13px; color: var(--leaf); font-weight: 600; }
+.preview pre { white-space: pre-wrap; font: 14px/1.5 var(--body); background: var(--paper); border-radius: 10px; padding: 10px 12px; margin: 8px 0 0; }

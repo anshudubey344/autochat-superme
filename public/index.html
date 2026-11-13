@@ -116,25 +116,30 @@
         <legend>Which column has…</legend>
         <label>Phone number<select name="col_phone" required></select></label>
         <label>Name<select name="col_name"></select></label>
-        <label>Service<select name="col_service"></select></label>
+        <label>Service / message type<select name="col_service"></select></label>
+        <label>Country code<select name="col_cc"></select></label>
         <label>Write status to<select name="col_status"></select></label>
+        <label>Only rows filled / ticked in<select name="col_send"></select></label>
       </fieldset>
+      <p class="hint">Numbers that already include a country code (like +41 79… or 4479…) are used as they are. For local numbers the country code column is used, otherwise the default below.</p>
       <p class="hint" id="statusHint"></p>
 
       <div class="row2">
-        <label>Country code for 10-digit numbers<input name="countryCode" value="91" inputmode="numeric"></label>
-        <fieldset class="existing" id="existingBox">
-          <legend>Rows already in the sheet</legend>
-          <label class="radio"><input type="radio" name="sendExisting" value="no" checked> Skip them, only message new rows</label>
-          <label class="radio"><input type="radio" name="sendExisting" value="yes"> Message them too</label>
+        <label>Default country code<input name="countryCode" value="91" inputmode="numeric"></label>
+        <fieldset class="existing">
+          <legend>Who gets a message</legend>
+          <label class="radio"><input type="radio" name="mode" value="manual" checked> I choose: rows wait in Review until I send them</label>
+          <label class="radio"><input type="radio" name="mode" value="auto"> Automatic: every new row, once the sheet is started</label>
         </fieldset>
       </div>
+      <p class="hint">Saving only loads the sheet. Nothing is sent until you press Start on the sheet or Send in Review.</p>
 
       <div class="tpl-head">
         <h4>Messages by service</h4>
-        <button class="btn small" type="button" id="addTpl">Add service</button>
+        <span class="pair"><button class="btn small" type="button" id="addFromSheet" hidden>Add services from this sheet</button>
+        <button class="btn small" type="button" id="addTpl">Add service</button></span>
       </div>
-      <p class="hint">Write the service exactly as it appears in the sheet. Use <code>{name}</code> for the person's first name. "Default" is used when the service cell is empty or not listed here.</p>
+      <p class="hint">Write the service as it appears in the sheet (capitals, spaces and _ don't matter). Use <code>{name}</code> for the person's first name. "Default" is used when the service cell is empty or not listed here.</p>
       <div id="tpls"></div>
     </div>
 
@@ -167,13 +172,14 @@
     <label>Username or email<input name="user" required maxlength="64" autocomplete="off"></label>
     <label>Role
       <select name="role">
-        <option value="manager">Manager: sheets, messages and tests</option>
+        <option value="manager">Manager: their own numbers, sheets and messages</option>
         <option value="viewer">Viewer: can only look</option>
         <option value="admin">Admin: everything, including numbers and team</option>
       </select>
     </label>
     <fieldset id="numbersBox">
-      <legend>Numbers they can use</legend>
+      <legend>Other numbers they can use</legend>
+      <p class="hint">Everyone always sees the numbers they add themselves. Tick here to also share admins' numbers.</p>
       <label class="radio"><input type="checkbox" name="allSenders"> All numbers, including ones added later</label>
       <div id="numberChecks" class="checks"></div>
     </fieldset>
@@ -233,6 +239,45 @@
       <button class="btn" type="button" id="googleClose">Close</button>
     </div>
   </div>
+</dialog>
+
+<!-- Review: choose who gets which message -->
+<dialog id="reviewDlg" class="wide">
+  <div class="dlg">
+    <h3 id="reviewTitle">Review</h3>
+    <p class="hint" id="reviewHint">Tick the people to message and pick the message for each. Rows you mark "Don't send" won't show up again.</p>
+    <div class="review-bar">
+      <label class="radio"><input type="checkbox" id="reviewAll"> Select all</label>
+      <span class="grow"></span>
+      <label class="pair">Set message for selected<select id="reviewBulk"><option value="">Choose…</option></select></label>
+    </div>
+    <div class="review-wrap"><table class="users review">
+      <thead><tr><th><span class="sr">Select</span></th><th>Row</th><th>Name</th><th>Phone</th><th>Message</th></tr></thead>
+      <tbody id="reviewRows"></tbody>
+    </table></div>
+    <details class="preview"><summary>Preview the selected message</summary><pre id="reviewPreview"></pre></details>
+    <p class="form-error" id="reviewError" hidden></p>
+    <div class="actions">
+      <button class="btn" type="button" id="reviewSkip" disabled>Don't send to selected</button>
+      <span class="grow"></span>
+      <button class="btn" type="button" id="reviewClose">Close</button>
+      <button class="btn primary" type="button" id="reviewSend" disabled>Send to selected</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Start an automatic sheet -->
+<dialog id="startDlg">
+  <form method="dialog" class="dlg">
+    <h3 id="startTitle">Start sending</h3>
+    <p id="startText"></p>
+    <div class="actions">
+      <button class="btn" value="cancel">Cancel</button>
+      <span class="grow"></span>
+      <button class="btn" value="all" id="startAll">Also rows already there</button>
+      <button class="btn primary" value="new">Only new rows from now</button>
+    </div>
+  </form>
 </dialog>
 
 <div id="toast" role="status" aria-live="polite"></div>

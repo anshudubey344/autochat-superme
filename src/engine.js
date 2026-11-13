@@ -16,24 +16,42 @@ const hourNow = () => Number(new Date().toLocaleString('en-GB', { timeZone: TZ, 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function normPhone(raw, cc) {
-  const s = String(raw || '').trim();
+  const s = clean(raw);
   if (!s) return null;
-  let d = s.replace(/\D/g, '');
-  if (!s.startsWith('+')) {
+  // "p:+447967020639" (Meta lead ads), "+44 7967 020639", "447967020639", "07967 020639" …
+  const plus = s.includes('+');
+  let d = (plus ? s.slice(s.indexOf('+')) : s).replace(/\D/g, '');
+  if (!plus) {
     if (d.startsWith('00')) d = d.slice(2);
     else { d = d.replace(/^0+/, ''); if (d.length <= 10) d = String(cc || '91') + d; }
   }
   return d.length >= 11 && d.length <= 15 ? d : null;
 }
 
-const splitServices = (v) => String(v || '').split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
-const keyOf = (senderId, phone, service) => `${senderId}|${phone}|${service.toLowerCase()}`;
+// Cell text without invisible characters
+function clean(v) { return String(v ?? '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim(); }
+// "1:1_private_yoga" and "1:1 Private Yoga" are the same service
+const normSvc = (v) => clean(v).replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').replace(/^[,;\s]+|[,;\s]+$/g, '').toLowerCase();
+const pretty = (v) => clean(v).replace(/_+/g, ' ').replace(/\s+/g, ' ').replace(/\s+,/g, ',').trim();
 
-function findTemplate(sheet, service) {
-  const t = sheet.templates || [];
-  return t.find((x) => x.service.trim().toLowerCase() === service.toLowerCase())
-      || t.find((x) => x.service.trim().toLowerCase() === 'default');
+function exactTemplate(sheet, service) {
+  const n = normSvc(service);
+  return (sheet.templates || []).find((x) => normSvc(x.service) === n);
 }
+function findTemplate(sheet, service) {
+  return exactTemplate(sheet, service) || (sheet.templates || []).find((x) => normSvc(x.service) === 'default');
+}
+// One cell can list several services ("Therapy, 1:1 Yoga"). A value that itself contains a comma
+// ("not_sure_yet,_help_me_choose") stays one service unless every part is a known message.
+function splitServices(sheet, v) {
+  const whole = pretty(v);
+  if (!whole) return [];
+  if (exactTemplate(sheet, whole)) return [whole];
+  const parts = whole.split(/[,;\n]/).map((x) => x.trim()).filter(Boolean);
+  if (parts.length > 1 && parts.every((x) => exactTemplate(sheet, x))) return parts;
+  return [whole];
+}
+const keyOf = (senderId, phone, service) => `${senderId}|${phone}|${normSvc(service)}`;
 
 function fill(message, name, service) {
   const first = String(name || '').trim().split(/\s+/)[0] || 'there';
@@ -41,15 +59,24 @@ function fill(message, name, service) {
   return message.replace(/\{name\}/gi, first).replace(/\{service\}/gi, label);
 }
 
-// Turn sheet rows into jobs. baselineOnly = mark everything as already handled (no sending).
-function collect(sheet, rows, baselineOnly) {
+// "Ticked" = the cell has something in it, except an explicit no (unticked checkbox = FALSE)
+const NOT_TICKED = /^(false|no|n|0|nahi|nahin|na|none|-|❌|✗|☐)$/i;
+const ticked = (v) => { const t = clean(v); return t !== '' && !NOT_TICKED.test(t); };
+const pendingCounts = new Map();   // sheetId -> rows waiting for your OK (review mode)
+
+// Turn sheet rows into candidate messages.
+//   baselineOnly: mark everything as already handled (no sending)
+//   dry: no side effects (used for the review list); rows without a matching message get tplMissing
+function collect(sheet, rows, { baselineOnly = false, dry = false } = {}) {
   const jobs = [], baseline = [];
   const c = sheet.cols;
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
-    const phone = normPhone(r[c.phone], sheet.countryCode);
+    if (c.send >= 0 && !ticked(r[c.send])) continue;                                      // only ticked / filled rows
+    const rowCc = c.cc >= 0 ? String(r[c.cc] || '').replace(/\D/g, '').slice(0, 4) : '';   // per-row country code column
+    const phone = normPhone(r[c.phone], rowCc || sheet.countryCode);
     if (!phone) continue;
-    let services = c.service >= 0 ? splitServices(r[c.service]) : [];
+    let services = c.service >= 0 ? splitServices(sheet, r[c.service]) : [];
     if (!services.length) services = ['Default'];
     for (const service of services) {
       const key = keyOf(sheet.senderId, phone, service);
@@ -59,38 +86,101 @@ function collect(sheet, rows, baselineOnly) {
         continue;
       }
       const tpl = findTemplate(sheet, service);
-      if (!tpl) {
+      if (!tpl && !dry) {
         store.sent.put(key, { status: 'no_template', sheetId: sheet.id, row: i + 1 });
         store.log('warn', `${sheet.name}: no message for "${service}" (row ${i + 1}). Add it in the sheet's messages.`, { sheetId: sheet.id });
         continue;
       }
-      jobs.push({ key, sheetId: sheet.id, senderId: sheet.senderId, row: i + 1, phone, name: r[c.name] || '', service, text: fill(tpl.message, r[c.name], service) });
+      jobs.push({ key, sheetId: sheet.id, senderId: sheet.senderId, row: i + 1, phone, name: clean(r[c.name]), service,
+        tplMissing: !tpl, text: tpl ? fill(tpl.message, r[c.name], service) : null });
     }
   }
   if (baseline.length) store.sent.putMany(baseline);
   return jobs;
 }
 
-async function checkSheet(sheet, { baselineOnly = false } = {}) {
+function enqueue(jobs) {
+  for (const j of jobs) {
+    queued.add(j.key);
+    if (!queues.has(j.senderId)) queues.set(j.senderId, []);
+    queues.get(j.senderId).push(j);
+  }
+  new Set(jobs.map((j) => j.senderId)).forEach((id) => kick(id));
+}
+
+async function read(sheet) {
   try {
     const rows = await sheets.readRows(sheet);
     sheetErrors.delete(sheet.id);
     sheet.lastChecked = new Date().toISOString();
     sheet.rowCount = Math.max(0, rows.length - 1);
     store.save();
-    const jobs = collect(sheet, rows, baselineOnly);
-    for (const j of jobs) {
-      queued.add(j.key);
-      if (!queues.has(j.senderId)) queues.set(j.senderId, []);
-      queues.get(j.senderId).push(j);
-    }
-    if (jobs.length) store.log('info', `${sheet.name}: ${jobs.length} new message(s) queued`, { sheetId: sheet.id });
-    jobs.length && kick(sheet.senderId);
-    return { queued: jobs.length };
+    return rows;
   } catch (e) {
     sheetErrors.set(sheet.id, e.message);
     throw e;
   }
+}
+
+// Automatic sheets: queue new rows. Review sheets: only count what's waiting for your OK.
+async function checkSheet(sheet, { baselineOnly = false } = {}) {
+  const rows = await read(sheet);
+  if (baselineOnly) { collect(sheet, rows, { baselineOnly: true }); return { queued: 0 }; }
+  if (sheet.mode !== 'auto') {
+    const pending = collect(sheet, rows, { dry: true }).length;
+    pendingCounts.set(sheet.id, pending);
+    return { pending };
+  }
+  const jobs = collect(sheet, rows);
+  if (jobs.length) store.log('info', `${sheet.name}: ${jobs.length} new message(s) queued`, { sheetId: sheet.id });
+  enqueue(jobs);
+  return { queued: jobs.length };
+}
+
+// ---- review mode: you pick who gets which message ----
+async function pending(sheet) {
+  const rows = await read(sheet);
+  const list = collect(sheet, rows, { dry: true });
+  pendingCounts.set(sheet.id, list.length);
+  return list;
+}
+
+// items: [{ row, phone, from, service }] — `from` is the message type it was listed under, `service` the one you picked
+async function approve(sheet, items, by) {
+  const list = await pending(sheet);
+  const jobs = [], problems = [];
+  for (const it of items) {
+    const p = list.find((x) => x.row === Number(it.row) && x.phone === String(it.phone) && normSvc(x.service) === normSvc(it.from));
+    if (!p) { problems.push(`row ${it.row}: already handled or changed in the sheet`); continue; }
+    const service = String(it.service || p.service);
+    const tpl = exactTemplate(sheet, service);
+    if (!tpl) { problems.push(`row ${it.row}: no message called "${service}"`); continue; }
+    const key = keyOf(sheet.senderId, p.phone, p.service);                 // what the sheet asked for → never offered again
+    const sendKey = keyOf(sheet.senderId, p.phone, service);
+    if (sendKey !== key && (queued.has(sendKey) || store.sent.has(sendKey))) {
+      store.sent.put(key, { status: 'skipped_manual', sheetId: sheet.id, row: p.row });
+      problems.push(`row ${it.row}: "${service}" was already sent to this number`); continue;
+    }
+    if (sendKey !== key) store.sent.put(key, { status: 'replaced', sheetId: sheet.id, row: p.row });
+    jobs.push({ ...p, key: sendKey, service, text: fill(tpl.message, p.name, service), manual: true });
+  }
+  if (jobs.length) store.log('info', `${sheet.name}: ${jobs.length} message(s) approved${by ? ` (by ${by})` : ''}`, { sheetId: sheet.id });
+  enqueue(jobs);
+  pendingCounts.set(sheet.id, Math.max(0, (pendingCounts.get(sheet.id) || 0) - items.length));
+  return { queued: jobs.length, problems };
+}
+
+async function skip(sheet, items, by) {
+  const list = await pending(sheet);
+  const marks = [];
+  for (const it of items) {
+    const p = list.find((x) => x.row === Number(it.row) && x.phone === String(it.phone) && normSvc(x.service) === normSvc(it.from));
+    if (p) marks.push([p.key, { status: 'skipped_manual', sheetId: sheet.id, row: p.row }]);
+  }
+  store.sent.putMany(marks);
+  if (marks.length) store.log('info', `${sheet.name}: ${marks.length} row(s) marked "don't send"${by ? ` (by ${by})` : ''}`, { sheetId: sheet.id });
+  pendingCounts.set(sheet.id, Math.max(0, (pendingCounts.get(sheet.id) || 0) - marks.length));
+  return { skipped: marks.length };
 }
 
 async function tick() {
@@ -122,7 +212,10 @@ async function kick(senderId) {
       if (store.db.settings.paused || !senders.isReady(senderId) || !inHours(sender)) break;
       if (sentToday(senderId) >= Number(sender.dailyLimit || 30)) break;
 
-      const job = q.shift();
+      // next job whose sheet is running (approved-by-hand jobs always go)
+      const idx = q.findIndex((j) => j.manual || (store.db.sheets.find((s) => s.id === j.sheetId) || {}).enabled);
+      if (idx < 0) break;
+      const [job] = q.splice(idx, 1);
       const sheet = store.db.sheets.find((s) => s.id === job.sheetId);
       let result;
       try {
@@ -148,7 +241,7 @@ async function kick(senderId) {
       store.save();
       if (sheet) writeBack(sheet, job, result).catch((e) => store.log('warn', `${sheet.name}: could not write status to row ${job.row}: ${e.message}`, { sheetId: sheet.id }));
 
-      if (q.length) {
+      if (q.some((j) => j.manual || (store.db.sheets.find((s) => s.id === j.sheetId) || {}).enabled)) {
         const min = Number(sender.minDelay || 8), max = Math.max(min, Number(sender.maxDelay || 20));
         await sleep((min + Math.random() * (max - min)) * 1000);
       }
@@ -171,9 +264,10 @@ async function writeBack(sheet, job, result) {
 
 function stats(sheetId) {
   const c = store.sent.stats(sheetId);
-  const sent = c.sent || 0, notOn = c.not_on_whatsapp || 0, failed = (c.failed || 0) + (c.no_template || 0), skipped = c.skipped_existing || 0;
+  const sent = c.sent || 0, notOn = c.not_on_whatsapp || 0, failed = (c.failed || 0) + (c.no_template || 0);
+  const skipped = (c.skipped_existing || 0) + (c.skipped_manual || 0);
   const waiting = [...queues.values()].flat().filter((j) => j.sheetId === sheetId).length;
-  return { sent, notOn, failed, skipped, waiting, error: sheetErrors.get(sheetId) || null };
+  return { sent, notOn, failed, skipped, waiting, review: pendingCounts.get(sheetId) ?? null, error: sheetErrors.get(sheetId) || null };
 }
 
 function forgetSheet(sheetId) {
@@ -192,4 +286,4 @@ function startLoop() {
   setInterval(() => { for (const id of queues.keys()) kick(id); }, 30000); // resume after hours/limits/reconnect
 }
 
-module.exports = { startLoop, checkSheet, stats, sentToday, inHours, forgetSheet, normPhone, kick, tick, _collect: collect };
+module.exports = { normSvc, pretty, startLoop, checkSheet, pending, approve, skip, stats, sentToday, inHours, forgetSheet, normPhone, kick, tick, _collect: collect };

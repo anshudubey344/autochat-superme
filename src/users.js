@@ -168,7 +168,13 @@ const isAdmin = (u) => u.role === 'admin';
 const canEdit = (u) => u.role === 'admin' || u.role === 'manager';
 function canUseSender(u, senderId) {
   if (isAdmin(u) || u.allSenders) return true;
-  return (u.senderIds || []).includes(senderId);   // empty list = no numbers
+  const s = store.db.senders.find((x) => x.id === senderId);
+  if (s && s.ownerId && s.ownerId === u.id) return true;     // their own number
+  return (u.senderIds || []).includes(senderId);              // numbers an admin shared with them
+}
+// Link / log out / change settings / remove: admins, or the person who added the number.
+function canManageSender(u, s) {
+  return isAdmin(u) || (canEdit(u) && !!s.ownerId && s.ownerId === u.id);
 }
 function dropSender(senderId) {           // a number was removed: take it off everyone's list
   let changed = false;
@@ -179,5 +185,5 @@ function dropSender(senderId) {           // a number was removed: take it off e
 module.exports = {
   load, ROLES, find, findByName, list: () => users.map(publicUser), publicUser,
   checkPassword, checkTotp, setAdmin, create, update, resetPassword, setPassword, setTotp, remove, touchLogin,
-  isAdmin, canEdit, canUseSender, dropSender, save, _all: () => users,
+  isAdmin, canEdit, canUseSender, canManageSender, dropSender, save, _all: () => users,
 };

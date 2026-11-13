@@ -49,6 +49,14 @@ sql.exec(`
   );
 `);
 sql.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1')").run();
+// v3: each number has an owner (the user who added it); NULL = admins only
+if (!sql.prepare('PRAGMA table_info(senders)').all().some((c) => c.name === 'owner_id')) {
+  sql.exec('ALTER TABLE senders ADD COLUMN owner_id TEXT');
+}
+// v4: sheet sending mode ('manual' = you approve each row, 'auto' = every new row)
+if (!sql.prepare('PRAGMA table_info(sheets)').all().some((c) => c.name === 'mode')) {
+  sql.exec("ALTER TABLE sheets ADD COLUMN mode TEXT NOT NULL DEFAULT 'auto'");     // existing sheets keep sending automatically
+}
 // v2: how each sheet is opened (connected Google account id, 'sa' = service account, NULL = public link)
 if (!sql.prepare('PRAGMA table_info(sheets)').all().some((c) => c.name === 'via')) {
   sql.exec("ALTER TABLE sheets ADD COLUMN via TEXT; UPDATE sheets SET via = CASE WHEN can_write = 1 THEN 'sa' END;");
@@ -62,11 +70,11 @@ function tx(fn) {
 }
 
 // ---------- config cache (numbers, sheets, settings) ----------
-const toSender = (r) => ({ id: r.id, name: r.name, dailyLimit: r.daily_limit, minDelay: r.min_delay, maxDelay: r.max_delay, startHour: r.start_hour, endHour: r.end_hour });
+const toSender = (r) => ({ id: r.id, name: r.name, dailyLimit: r.daily_limit, minDelay: r.min_delay, maxDelay: r.max_delay, startHour: r.start_hour, endHour: r.end_hour, ownerId: r.owner_id || null });
 const toSheet = (r) => ({
   id: r.id, name: r.name, url: r.url, spreadsheetId: r.spreadsheet_id, gid: r.gid, senderId: r.sender_id,
   cols: JSON.parse(r.cols), templates: JSON.parse(r.templates), countryCode: r.country_code,
-  enabled: !!r.enabled, canWrite: !!r.can_write, lastChecked: r.last_checked, rowCount: r.row_count, via: r.via || null,
+  enabled: !!r.enabled, canWrite: !!r.can_write, lastChecked: r.last_checked, rowCount: r.row_count, via: r.via || null, mode: r.mode || 'auto',
 });
 const cfg = {
   settings: Object.fromEntries(sql.prepare('SELECT key, value FROM settings').all().map((r) => [r.key, JSON.parse(r.value)])),
@@ -82,12 +90,12 @@ function flush() {
     sql.exec('DELETE FROM settings; DELETE FROM senders; DELETE FROM sheets;');
     const st = sql.prepare('INSERT INTO settings(key, value) VALUES (?, ?)');
     for (const [k, v] of Object.entries(cfg.settings)) st.run(k, JSON.stringify(v));
-    const ss = sql.prepare('INSERT INTO senders VALUES (?,?,?,?,?,?,?,?)');
-    cfg.senders.forEach((s, i) => ss.run(s.id, s.name, s.dailyLimit, s.minDelay, s.maxDelay, s.startHour, s.endHour, i));
-    const sh = sql.prepare(`INSERT INTO sheets(id, name, url, spreadsheet_id, gid, sender_id, cols, templates, country_code, enabled, can_write, last_checked, row_count, position, via)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const ss = sql.prepare('INSERT INTO senders(id, name, daily_limit, min_delay, max_delay, start_hour, end_hour, position, owner_id) VALUES (?,?,?,?,?,?,?,?,?)');
+    cfg.senders.forEach((s, i) => ss.run(s.id, s.name, s.dailyLimit, s.minDelay, s.maxDelay, s.startHour, s.endHour, i, s.ownerId || null));
+    const sh = sql.prepare(`INSERT INTO sheets(id, name, url, spreadsheet_id, gid, sender_id, cols, templates, country_code, enabled, can_write, last_checked, row_count, position, via, mode)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     cfg.sheets.forEach((h, i) => sh.run(h.id, h.name, h.url, h.spreadsheetId, String(h.gid), h.senderId, JSON.stringify(h.cols),
-      JSON.stringify(h.templates || []), h.countryCode, h.enabled ? 1 : 0, h.canWrite ? 1 : 0, h.lastChecked || null, h.rowCount ?? null, i, h.via || null));
+      JSON.stringify(h.templates || []), h.countryCode, h.enabled ? 1 : 0, h.canWrite ? 1 : 0, h.lastChecked || null, h.rowCount ?? null, i, h.via || null, h.mode === 'manual' ? 'manual' : 'auto'));
   });
 }
 function save() {
